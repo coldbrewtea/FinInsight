@@ -20,6 +20,7 @@ from decimal import Decimal, InvalidOperation
 from email.message import Message
 from typing import Any, Dict, List, Optional, Tuple
 
+import email.header as _email_header
 from bs4 import BeautifulSoup
 
 from fininsight.models.enums import AssetType, Market
@@ -81,19 +82,19 @@ class FundEmailParser(StatementParser):
 
         # 发件人白名单过滤（配置了才检查）
         if self._sender_patterns:
-            sender = raw_data.get("From", "")
+            sender = _decode_header(raw_data.get("From", ""))
             if not any(
                 re.search(p, sender, re.IGNORECASE) for p in self._sender_patterns
             ):
                 return False
 
         # 主题关键词检查
-        subject = raw_data.get("Subject", "")
+        subject = _decode_header(raw_data.get("Subject", ""))
         return any(kw in subject for kw in _STATEMENT_SUBJECT_KEYWORDS)
 
     def parse(self, raw_data: Message) -> List[HoldingRecord]:
         """解析对账单邮件，返回持仓记录列表。"""
-        subject = raw_data.get("Subject", "")
+        subject = _decode_header(raw_data.get("Subject", ""))
         period = self._extract_period(raw_data)
         if period is None:
             logger.warning("无法从邮件主题中提取时间周期，跳过: %s", subject)
@@ -115,7 +116,7 @@ class FundEmailParser(StatementParser):
         2. 「YYYY年度对账单」或「YYYY年对账单」
         3. 「YYYY-MM-DD ~ YYYY-MM-DD」日期区间
         """
-        subject = message.get("Subject", "")
+        subject = _decode_header(message.get("Subject", ""))
 
         # 规则 1：季度
         m = re.search(r"(\d{4})\s*年\s*[第]?\s*([1-4])\s*季度", subject)
@@ -300,6 +301,20 @@ class FundEmailParser(StatementParser):
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+def _decode_header(value: Any) -> str:
+    """将邮件头部值（可能是 Header 对象或编码字符串）解码为普通字符串。"""
+    if not value:
+        return ""
+    # decode_header 处理 =?charset?encoding?text?= 格式
+    parts = []
+    for part, charset in _email_header.decode_header(str(value)):
+        if isinstance(part, bytes):
+            parts.append(part.decode(charset or "utf-8", errors="replace"))
+        else:
+            parts.append(str(part))
+    return "".join(parts)
+
 
 def _get_html_body(message: Message) -> Optional[str]:
     """从邮件中提取 HTML 正文。"""
