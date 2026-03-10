@@ -325,6 +325,9 @@ class FundEmailParser(StatementParser):
         elif "黄金" in name and "基金" not in name:
             asset_type = AssetType.GOLD
             market = Market.DOMESTIC
+        elif "货币" in name:
+            asset_type = AssetType.CASH
+            market = Market.DOMESTIC
         elif "存单" in name or "定期" in name:
             asset_type = AssetType.CD
             market = Market.DOMESTIC

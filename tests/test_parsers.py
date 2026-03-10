@@ -373,16 +373,33 @@ class TestGTFundFixture:
         """应解析出 3 条持仓（交易表不再产生额外行）。"""
         assert len(gtfund_holdings) == 3
 
-    def test_inflow_for_jishi_bond(self, gtfund_holdings):
-        """嘉实超短傘有两笔申购共 400。"""
-        jishi = next(h for h in gtfund_holdings if h.asset.code == "160222")
-        assert jishi.inflow == Decimal("400.00")
+    def test_inflow_for_shipin(self, gtfund_holdings):
+        """食品(160222)两笔申购共 8000。"""
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert shipin.inflow == Decimal("8000.00")
 
-    def test_inflow_zero_for_other_funds(self, gtfund_holdings):
-        """其他基金无交易，inflow 应为 0。"""
-        others = [h for h in gtfund_holdings if h.asset.code != "160222"]
-        for h in others:
-            assert h.inflow == Decimal("0")
+    def test_outflow_for_shipin(self, gtfund_holdings):
+        """食品(160222)两笔赎回共 3500。"""
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert shipin.outflow == Decimal("3500.00")
+
+    def test_inflow_for_huobi(self, gtfund_holdings):
+        """国泰货币B(005253)申购 10000。"""
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        assert huobi.inflow == Decimal("10000.00")
+        assert huobi.outflow == Decimal("5000.00")
+
+    def test_inflow_for_sp500(self, gtfund_holdings):
+        """国泰标普500ETF(017028)申购 500。"""
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        assert sp500.inflow == Decimal("500.00")
+        assert sp500.outflow == Decimal("0")
+
+    def test_huobi_classified_as_cash(self, gtfund_holdings):
+        """国泰货币B 应识别为现金类型。"""
+        from fininsight.models.enums import AssetType
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        assert huobi.asset.asset_type == AssetType.CASH
 
     def test_opening_value_distributed(self, gtfund_holdings):
         """期初总金额 52570.36 应被分配，各基金 opening > 0。"""
