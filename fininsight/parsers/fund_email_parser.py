@@ -37,7 +37,7 @@ _COLUMN_PATTERNS: Dict[str, List[str]] = {
     "name":          ["基金名称", "产品名称", "投资标的", "名称"],
     "code":          ["基金代码", "产品代码", "代码"],
     "opening_value": ["期初市值", "上期末市值", "期初金额", "上期市值"],
-    "closing_value": ["期末持有净值", "期末市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
+    "closing_value": ["期末持有净值", "期末市值", "期末参考市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
     "inflow":        ["申购金额", "买入金额", "入金金额", "申购", "买入"],
     "outflow":       ["赎回金额", "卖出金额", "出金金额", "赎回", "卖出"],
     "market_value":  ["最新市值", "持有市值", "市值", "资产市值"],
@@ -194,12 +194,15 @@ class FundEmailParser(StatementParser):
                 continue  # 跳过交易明细表
             holdings.extend(self._parse_table(table, period))
 
-        # 步骤 4：将交易流水的入金/出金回填到持仓记录（按基金代码匹配）
+        # 步骤 4：将交易流水的入金/出金回填到持仓记录（按代码匹配，无代码时按名称回退）
         if tx_map:
             for h in holdings:
-                code = h.asset.code
-                if code and code in tx_map:
-                    inflow, outflow = tx_map[code]
+                inflow, outflow = Decimal("0"), Decimal("0")
+                if h.asset.code and h.asset.code in tx_map:
+                    inflow, outflow = tx_map[h.asset.code]
+                elif h.asset.name and h.asset.name in tx_map:
+                    inflow, outflow = tx_map[h.asset.name]
+                if inflow or outflow:
                     h.inflow = inflow
                     h.outflow = outflow
             logger.debug("从交易明细表回填了 %d 只基金的入金/出金数据", len(tx_map))
@@ -252,6 +255,8 @@ class FundEmailParser(StatementParser):
 
         if "name" not in col_map:
             return []  # 不是持仓表格
+        if "closing_value" not in col_map and "market_value" not in col_map:
+            return []  # 无市值列，不是有效持仓表（可能是仅有收益的辅助表）
 
         holdings: List[HoldingRecord] = []
         for row in rows[1:]:
@@ -545,6 +550,9 @@ def _extract_transaction_map(
         code_idx = next(
             (i for i, h in enumerate(headers) if "代码" in h), None
         )
+        name_idx = next(
+            (i for i, h in enumerate(headers) if "基金名称" in h or "产品名称" in h), None
+        )
         type_idx = next(
             (i for i, h in enumerate(headers) if "业务类型" in h), None
         )
@@ -565,13 +573,15 @@ def _extract_transaction_map(
 
         for row in rows[1:]:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-            needed = max(c for c in [type_idx, amt_idx, code_idx] if c is not None)
+            needed = max(c for c in [type_idx, amt_idx, code_idx, name_idx] if c is not None)
             if needed >= len(cells):
                 continue
 
             tx_type = cells[type_idx]
             code = cells[code_idx].strip() if code_idx is not None else None
-            if not code:
+            name = cells[name_idx].strip() if name_idx is not None else None
+            key = code if code else name
+            if not key:
                 continue
 
             try:
@@ -582,12 +592,12 @@ def _extract_transaction_map(
             if amount <= Decimal("0"):
                 continue
 
-            if code not in result:
-                result[code] = [Decimal("0"), Decimal("0")]
+            if key not in result:
+                result[key] = [Decimal("0"), Decimal("0")]
 
             if any(kw in tx_type for kw in _INFLOW_TX_KEYWORDS):
-                result[code][0] += amount
+                result[key][0] += amount
             elif any(kw in tx_type for kw in _OUTFLOW_TX_KEYWORDS):
-                result[code][1] += amount
+                result[key][1] += amount
 
     return {k: (v[0], v[1]) for k, v in result.items()}

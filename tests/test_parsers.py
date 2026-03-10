@@ -355,7 +355,7 @@ class TestTransactionAndSummaryParsing:
 
 
 class TestGTFundFixture:
-    """国泰基金 2025 年年度对账单 .eml fixture 端到端验证。"""
+    """国泰基金 2025 年年度对账单真实 .eml fixture 端到端验证。"""
 
     @pytest.fixture(scope="class")
     def gtfund_holdings(self):
@@ -374,25 +374,25 @@ class TestGTFundFixture:
         assert len(gtfund_holdings) == 3
 
     def test_inflow_for_shipin(self, gtfund_holdings):
-        """食品(160222)两笔申购共 8000。"""
+        """食品(160222)全年定投申购合计 2550。"""
         shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
-        assert shipin.inflow == Decimal("8000.00")
+        assert shipin.inflow == Decimal("2550.00")
 
     def test_outflow_for_shipin(self, gtfund_holdings):
-        """食品(160222)两笔赎回共 3500。"""
+        """食品(160222)全年赎回合计 43853.30。"""
         shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
-        assert shipin.outflow == Decimal("3500.00")
+        assert shipin.outflow == Decimal("43853.30")
 
     def test_inflow_for_huobi(self, gtfund_holdings):
-        """国泰货币B(005253)申购 10000。"""
+        """国泰货币B(005253)全年无交易。"""
         huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
-        assert huobi.inflow == Decimal("10000.00")
-        assert huobi.outflow == Decimal("5000.00")
+        assert huobi.inflow == Decimal("0")
+        assert huobi.outflow == Decimal("0")
 
     def test_inflow_for_sp500(self, gtfund_holdings):
-        """国泰标普500ETF(017028)申购 500。"""
+        """国泰标普500ETF(017028)全年申购 80。"""
         sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
-        assert sp500.inflow == Decimal("500.00")
+        assert sp500.inflow == Decimal("80.00")
         assert sp500.outflow == Decimal("0")
 
     def test_huobi_classified_as_cash(self, gtfund_holdings):
@@ -402,19 +402,16 @@ class TestGTFundFixture:
         assert huobi.asset.asset_type == AssetType.CASH
 
     def test_opening_value_from_profit(self, gtfund_holdings):
-        """opening 应由收益金额反推而来，非零却非负（017028 新仓期初为 0）。"""
+        """opening 应由期间收益反推而来，017028 新仓期初应为 0。"""
         for h in gtfund_holdings:
             assert h.opening_value >= Decimal("0")
-        # 005253 和 160222 期初应 > 0
-        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
-        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
-        assert huobi.opening_value > Decimal("0")
-        assert shipin.opening_value > Decimal("0")
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        assert sp500.opening_value == Decimal("0.00")
 
     def test_total_opening_matches_portfolio(self, gtfund_holdings):
-        """收益列反推后汇总 opening 应接近 48646.89。"""
+        """收益反推后汇总 opening 应接近 99870.19。"""
         total = sum(h.opening_value for h in gtfund_holdings)
-        assert abs(total - Decimal("48646.89")) <= Decimal("0.10")
+        assert abs(total - Decimal("99870.19")) <= Decimal("0.10")
 
     def test_closing_total(self, gtfund_holdings):
         """期末持有净值合计应等于 52570.36。"""
@@ -422,16 +419,16 @@ class TestGTFundFixture:
         assert total == Decimal("52570.36")
 
     def test_per_fund_profit_from_email(self, gtfund_holdings):
-        """每只基金收益应与邮件中的收益金额列完全匹配。"""
+        """每只基金收益应与邮件中的期间收益表完全匹配。"""
         huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
         sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
         shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
-        assert huobi.profit == Decimal("-40.00")
-        assert sp500.profit == Decimal("-418.52")
-        assert shipin.profit == Decimal("-5618.01")
+        assert huobi.profit == Decimal("78.44")
+        assert sp500.profit == Decimal("1.48")
+        assert shipin.profit == Decimal("-6156.45")
 
     def test_total_profit_matches_email_stated_value(self, gtfund_holdings):
-        """收益合计应等于邮件所述 期末变化总金额 = -6076.53。"""
+        """收益合计应等于邮件所述 本期收益 = -6076.53。"""
         total_profit = sum(h.profit for h in gtfund_holdings)
         assert total_profit == Decimal("-6076.53")
 
