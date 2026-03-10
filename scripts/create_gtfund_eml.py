@@ -47,7 +47,7 @@ HTML_TEMPLATE = """\
 <table>
   <tr><td>基金账号：</td><td>0212985630/9805351561123</td></tr>
   <tr><td>统计时间段：</td><td>2025-1-1至2025-12-31</td></tr>
-  <tr><td>期初总金额：</td><td>52570.36</td></tr>
+  <tr><td>期初总金额：</td><td>58646.89</td></tr>
   <tr><td>期末变化总金额：</td><td>-6076.53</td></tr>
 </table>
 
@@ -62,14 +62,14 @@ HTML_TEMPLATE = """\
   </tr>
   <tr>
     <td>005253</td>
-    <td>国泰基金债券B</td>
+    <td>国泰纯债债券B</td>
     <td>1.000</td>
     <td>8459.91</td>
     <td>继续持有</td>
   </tr>
   <tr>
     <td>017028</td>
-    <td>国泰基金500ETF日息申购公告(QDII)A</td>
+    <td>国泰中证500ETF(QDII)A</td>
     <td>1.5837</td>
     <td>81.48</td>
     <td>继续持有</td>

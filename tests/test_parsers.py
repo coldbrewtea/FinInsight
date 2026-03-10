@@ -390,9 +390,9 @@ class TestGTFundFixture:
             assert h.opening_value > Decimal("0")
 
     def test_total_opening_matches_portfolio(self, gtfund_holdings):
-        """分配后汇总 opening 应接近 52570.36。"""
+        """分配后汇总 opening 应接近 58646.89（期初总金额）。"""
         total = sum(h.opening_value for h in gtfund_holdings)
-        assert abs(total - Decimal("52570.36")) <= Decimal("0.10")
+        assert abs(total - Decimal("58646.89")) <= Decimal("0.10")
 
     def test_closing_total(self, gtfund_holdings):
         """期末持有净值合计应等于 52570.36。"""
