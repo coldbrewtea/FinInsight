@@ -37,7 +37,7 @@ _COLUMN_PATTERNS: Dict[str, List[str]] = {
     "name":          ["基金名称", "产品名称", "投资标的", "名称"],
     "code":          ["基金代码", "产品代码", "代码"],
     "opening_value": ["期初市值", "上期末市值", "期初金额", "上期市值"],
-    "closing_value": ["期末市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
+    "closing_value": ["期末持有净值", "期末市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
     "inflow":        ["申购金额", "买入金额", "入金金额", "申购", "买入"],
     "outflow":       ["赎回金额", "卖出金额", "出金金额", "赎回", "卖出"],
     "market_value":  ["最新市值", "持有市值", "市值", "资产市值"],
@@ -123,8 +123,8 @@ class FundEmailParser(StatementParser):
         if m:
             return ReportPeriod.from_year_quarter(int(m.group(1)), int(m.group(2)))
 
-        # 规则 2：全年
-        m = re.search(r"(\d{4})\s*年[度]?\s*对账单", subject)
+        # 规则 2：全年（兼容「YYYY年度对账单」/「YYYY年年度电子对账单」等写法）
+        m = re.search(r"(\d{4})\s*年.*?对账单", subject)
         if m:
             return ReportPeriod.from_year(int(m.group(1)))
 
