@@ -1,0 +1,42 @@
+# FinInsight 配置文件模板
+# 使用方式：复制本文件为 config.yaml，填入真实信息
+#   cp config/config.example.yaml config/config.yaml
+# 注意：config.yaml 已在 .gitignore 中，切勿提交真实凭据到版本库！
+
+email:
+  # IMAP 服务器地址，常见示例：
+  #   Gmail:   imap.gmail.com
+  #   QQ邮箱:  imap.qq.com
+  #   163邮箱: imap.163.com
+  #   Outlook: outlook.office365.com
+  host: "{{EMAIL_IMAP_HOST}}"
+
+  # IMAP 端口（SSL 通常为 993，非 SSL 为 143）
+  port: 993
+
+  # 邮箱账号（完整邮箱地址）
+  username: "{{EMAIL_USERNAME}}"
+
+  # 邮箱密码或授权码（建议使用应用专用密码）
+  password: "{{EMAIL_PASSWORD}}"
+
+  # 是否启用 SSL（推荐 true）
+  use_ssl: true
+
+  # 搜索的邮箱文件夹（通常为 INBOX）
+  mailbox: "INBOX"
+
+output:
+  # 报告输出目录（相对路径或绝对路径）
+  directory: "./output"
+
+parsers:
+  fund_email:
+    # 是否启用基金邮件解析器
+    enabled: true
+
+    # 可选：限制只解析来自特定发件人的邮件（Python 正则表达式列表）
+    # 留空则不限制发件人，仅通过邮件主题关键词判断
+    sender_patterns:
+      # - "no-reply@.*\\.com\\.cn"
+      # - "statement@yourbank\\.com"
