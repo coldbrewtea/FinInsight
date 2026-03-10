@@ -401,20 +401,39 @@ class TestGTFundFixture:
         huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
         assert huobi.asset.asset_type == AssetType.CASH
 
-    def test_opening_value_distributed(self, gtfund_holdings):
-        """期初总金额 52570.36 应被分配，各基金 opening > 0。"""
+    def test_opening_value_from_profit(self, gtfund_holdings):
+        """opening 应由收益金额反推而来，非零却非负（017028 新仓期初为 0）。"""
         for h in gtfund_holdings:
-            assert h.opening_value > Decimal("0")
+            assert h.opening_value >= Decimal("0")
+        # 005253 和 160222 期初应 > 0
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert huobi.opening_value > Decimal("0")
+        assert shipin.opening_value > Decimal("0")
 
     def test_total_opening_matches_portfolio(self, gtfund_holdings):
-        """分配后汇总 opening 应接近 58646.89（期初总金额）。"""
+        """收益列反推后汇总 opening 应接近 48646.89。"""
         total = sum(h.opening_value for h in gtfund_holdings)
-        assert abs(total - Decimal("58646.89")) <= Decimal("0.10")
+        assert abs(total - Decimal("48646.89")) <= Decimal("0.10")
 
     def test_closing_total(self, gtfund_holdings):
         """期末持有净值合计应等于 52570.36。"""
         total = sum(h.closing_value for h in gtfund_holdings)
         assert total == Decimal("52570.36")
+
+    def test_per_fund_profit_from_email(self, gtfund_holdings):
+        """每只基金收益应与邮件中的收益金额列完全匹配。"""
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert huobi.profit == Decimal("-40.00")
+        assert sp500.profit == Decimal("-418.52")
+        assert shipin.profit == Decimal("-5618.01")
+
+    def test_total_profit_matches_email_stated_value(self, gtfund_holdings):
+        """收益合计应等于邮件所述 期末变化总金额 = -6076.53。"""
+        total_profit = sum(h.profit for h in gtfund_holdings)
+        assert total_profit == Decimal("-6076.53")
 
 
 # ---------------------------------------------------------------------------

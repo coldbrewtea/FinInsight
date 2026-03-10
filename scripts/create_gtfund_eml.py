@@ -47,7 +47,7 @@ HTML_TEMPLATE = """\
 <table>
   <tr><td>基金账号：</td><td>0212985630/9805351561123</td></tr>
   <tr><td>统计时间段：</td><td>2025-1-1至2025-12-31</td></tr>
-  <tr><td>期初总金额：</td><td>58646.89</td></tr>
+  <tr><td>期初总金额：</td><td>48646.89</td></tr>
   <tr><td>期末变化总金额：</td><td>-6076.53</td></tr>
 </table>
 
@@ -58,6 +58,7 @@ HTML_TEMPLATE = """\
     <td>基金名称</td>
     <td>期末净值</td>
     <td>期末持有净值</td>
+    <td>收益金额</td>
     <td>状态</td>
   </tr>
   <tr>
@@ -65,6 +66,7 @@ HTML_TEMPLATE = """\
     <td>国泰货币B</td>
     <td>1.000</td>
     <td>8459.91</td>
+    <td>-40.00</td>
     <td>继续持有</td>
   </tr>
   <tr>
@@ -72,6 +74,7 @@ HTML_TEMPLATE = """\
     <td>国泰标普500ETF发起联接（QDII）A人民币</td>
     <td>1.5837</td>
     <td>81.48</td>
+    <td>-418.52</td>
     <td>继续持有</td>
   </tr>
   <tr>
@@ -79,6 +82,7 @@ HTML_TEMPLATE = """\
     <td>食品</td>
     <td>0.7737</td>
     <td>44028.97</td>
+    <td>-5618.01</td>
     <td>继续持有</td>
   </tr>
 </table>

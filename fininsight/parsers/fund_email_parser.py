@@ -204,6 +204,21 @@ class FundEmailParser(StatementParser):
                     h.outflow = outflow
             logger.debug("从交易明细表回填了 %d 只基金的入金/出金数据", len(tx_map))
 
+        # 步骤 4.5：若持仓表有每只基金的收益金额列，直接用收益反推期初市值
+        #   opening_i = closing_i - profit_i - inflow_i + outflow_i
+        profit_map = _extract_profit_map(tables)
+        if profit_map:
+            for h in holdings:
+                code = h.asset.code
+                if code and code in profit_map:
+                    email_profit = profit_map[code]
+                    h.opening_value = (
+                        h.closing_value - email_profit - h.inflow + h.outflow
+                    ).quantize(Decimal("0.01"))
+            logger.debug(
+                "从持仓表收益列反推了 %d 只基金的期初市值", len(profit_map)
+            )
+
         # 步骤 5：若持仓表无期初列（所有 opening_value 均为 0），且有期初总金额，
         #         则按期末市值占比近似分配（注：这是估算值，非精确的每只基金期初）
         if portfolio_opening is not None and portfolio_opening > Decimal("0"):
@@ -456,6 +471,53 @@ def _extract_portfolio_opening(tables: Any) -> Optional[Decimal]:
                 except InvalidOperation:
                     pass
     return None
+
+
+def _extract_profit_map(tables: Any) -> Dict[str, Decimal]:
+    """从持仓表中提取各基金的收益金额（如有「收益金额」「盈亏金额」等列）。
+
+    适配国泰基金年度对账单 Table 1 中的「收益金额」列。
+    若未找到收益列或无基金代码列，则返回空字典。
+
+    Returns:
+        {基金代码: 收益金额}
+    """
+    _PROFIT_PATTERNS = ("收益金额", "盈亏金额", "浮动盈亏", "收益", "盈亏")
+
+    for table in tables:
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        headers = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+        # 跳过交易明细表
+        if set(headers) & _TRANSACTION_TABLE_SIGNALS:
+            continue
+        profit_idx = next(
+            (i for i, h in enumerate(headers)
+             if any(p in h for p in _PROFIT_PATTERNS)),
+            None,
+        )
+        code_idx = next(
+            (i for i, h in enumerate(headers) if "代码" in h), None
+        )
+        if profit_idx is None or code_idx is None:
+            continue
+
+        profit_map: Dict[str, Decimal] = {}
+        for row in rows[1:]:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if max(profit_idx, code_idx) >= len(cells):
+                continue
+            code = cells[code_idx].strip()
+            if not code:
+                continue
+            try:
+                profit_map[code] = _parse_decimal(cells[profit_idx])
+            except (InvalidOperation, IndexError):
+                pass
+        if profit_map:
+            return profit_map
+    return {}
 
 
 def _extract_transaction_map(
