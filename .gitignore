@@ -26,6 +26,10 @@ output/
 htmlcov/
 .tox/
 
+# Real email fixtures (private data - local use only)
+# Keep committed: 2024Q4_fund_statement.eml, 2025_gtfund_annual_statement.eml
+tests/fixtures/emails/2025_fullgoal_*.eml
+
 # IDE
 .idea/
 .vscode/
