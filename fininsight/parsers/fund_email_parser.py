@@ -37,7 +37,7 @@ _COLUMN_PATTERNS: Dict[str, List[str]] = {
     "name":          ["基金名称", "产品名称", "投资标的", "名称"],
     "code":          ["基金代码", "产品代码", "代码"],
     "opening_value": ["期初市值", "上期末市值", "期初金额", "上期市值"],
-    "closing_value": ["期末持有净值", "期末市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
+    "closing_value": ["期末持有净值", "期末市值", "期末参考市值", "本期末市值", "期末金额", "本期市值", "当前市值"],
     "inflow":        ["申购金额", "买入金额", "入金金额", "申购", "买入"],
     "outflow":       ["赎回金额", "卖出金额", "出金金额", "赎回", "卖出"],
     "market_value":  ["最新市值", "持有市值", "市值", "资产市值"],
@@ -46,6 +46,19 @@ _COLUMN_PATTERNS: Dict[str, List[str]] = {
 
 # 邮件主题中表示「对账单/持仓报告」的关键词
 _STATEMENT_SUBJECT_KEYWORDS = ["对账单", "持仓", "资产报告", "理财报告", "持有明细", "账户报告"]
+
+# ---------------------------------------------------------------------------
+# 交易明细表识别与分类
+# ---------------------------------------------------------------------------
+
+# 命中任意一个则该 <table> 视为交易流水表，不作为持仓表解析
+_TRANSACTION_TABLE_SIGNALS: frozenset = frozenset({"申请日期", "确认日期", "业务类型"})
+
+# 申购/买入类操作关键词 → 计入 inflow
+_INFLOW_TX_KEYWORDS: frozenset = frozenset(["申购", "买入", "定投", "转入", "红利再投"])
+
+# 赎回/卖出类操作关键词 → 计入 outflow
+_OUTFLOW_TX_KEYWORDS: frozenset = frozenset(["赎回", "卖出", "转出"])
 
 
 class FundEmailParser(StatementParser):
@@ -147,16 +160,86 @@ class FundEmailParser(StatementParser):
     def _extract_holdings(
         self, message: Message, period: ReportPeriod
     ) -> List[HoldingRecord]:
-        """从 HTML 邮件正文中提取所有持仓记录。"""
+        """从 HTML 邮件正文中提取所有持仓记录。
+
+        处理流程：
+        1. 从账户摘要表（key-value 形式）提取期初总金额
+        2. 从交易明细表（含「业务类型」等列）提取各基金的申购/赎回金额
+        3. 仅对剩余持仓表调用 _parse_table
+        4. 将交易流水中的入金/出金回填到对应基金的 HoldingRecord
+        5. 若持仓表无期初列且存在期初总金额，则按期末市值占比分配（近似值）
+        """
         html = _get_html_body(message)
         if not html:
             logger.debug("邮件无 HTML 正文，跳过")
             return []
 
         soup = BeautifulSoup(html, "html.parser")
+        tables = soup.find_all("table")
+
+        # 步骤 1：提取账户期初总金额（如国泰基金年度对账单的基本信息表）
+        portfolio_opening = _extract_portfolio_opening(tables)
+
+        # 步骤 2：从交易明细表提取入金/出金，按基金代码汇总
+        tx_map = _extract_transaction_map(tables)
+
+        # 步骤 3：解析持仓表格，跳过交易明细表（其行不是持仓记录）
         holdings: List[HoldingRecord] = []
-        for table in soup.find_all("table"):
+        for table in tables:
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            header_set = {c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])}
+            if header_set & _TRANSACTION_TABLE_SIGNALS:
+                continue  # 跳过交易明细表
             holdings.extend(self._parse_table(table, period))
+
+        # 步骤 4：将交易流水的入金/出金回填到持仓记录（按代码匹配，无代码时按名称回退）
+        if tx_map:
+            for h in holdings:
+                inflow, outflow = Decimal("0"), Decimal("0")
+                if h.asset.code and h.asset.code in tx_map:
+                    inflow, outflow = tx_map[h.asset.code]
+                elif h.asset.name and h.asset.name in tx_map:
+                    inflow, outflow = tx_map[h.asset.name]
+                if inflow or outflow:
+                    h.inflow = inflow
+                    h.outflow = outflow
+            logger.debug("从交易明细表回填了 %d 只基金的入金/出金数据", len(tx_map))
+
+        # 步骤 4.5：若持仓表有每只基金的收益金额列，直接用收益反推期初市值
+        #   opening_i = closing_i - profit_i - inflow_i + outflow_i
+        profit_map = _extract_profit_map(tables)
+        if profit_map:
+            for h in holdings:
+                code = h.asset.code
+                if code and code in profit_map:
+                    email_profit = profit_map[code]
+                    h.opening_value = (
+                        h.closing_value - email_profit - h.inflow + h.outflow
+                    ).quantize(Decimal("0.01"))
+            logger.debug(
+                "从持仓表收益列反推了 %d 只基金的期初市值", len(profit_map)
+            )
+
+        # 步骤 5：若持仓表无期初列（所有 opening_value 均为 0），且有期初总金额，
+        #         则按期末市值占比近似分配（注：这是估算值，非精确的每只基金期初）
+        if portfolio_opening is not None and portfolio_opening > Decimal("0"):
+            total_holding_opening = sum(h.opening_value for h in holdings)
+            if total_holding_opening == Decimal("0") and holdings:
+                total_closing = sum(h.closing_value for h in holdings)
+                if total_closing > Decimal("0"):
+                    for h in holdings:
+                        ratio = h.closing_value / total_closing
+                        h.opening_value = (portfolio_opening * ratio).quantize(
+                            Decimal("0.01")
+                        )
+                    logger.debug(
+                        "期初总金额 ¥%s 已按期末市值占比分配至 %d 只基金（近似）",
+                        portfolio_opening,
+                        len(holdings),
+                    )
+
         return holdings
 
     def _parse_table(self, table: Any, period: ReportPeriod) -> List[HoldingRecord]:
@@ -172,6 +255,8 @@ class FundEmailParser(StatementParser):
 
         if "name" not in col_map:
             return []  # 不是持仓表格
+        if "closing_value" not in col_map and "market_value" not in col_map:
+            return []  # 无市值列，不是有效持仓表（可能是仅有收益的辅助表）
 
         holdings: List[HoldingRecord] = []
         for row in rows[1:]:
@@ -259,6 +344,9 @@ class FundEmailParser(StatementParser):
             asset_type = AssetType.FUND
         elif "黄金" in name and "基金" not in name:
             asset_type = AssetType.GOLD
+            market = Market.DOMESTIC
+        elif "货币" in name:
+            asset_type = AssetType.CASH
             market = Market.DOMESTIC
         elif "存单" in name or "定期" in name:
             asset_type = AssetType.CD
@@ -360,3 +448,156 @@ def _parse_date(value: str) -> Optional[date]:
         except ValueError:
             continue
     return None
+
+
+def _extract_portfolio_opening(tables: Any) -> Optional[Decimal]:
+    """从账户摘要表中提取期初总金额。
+
+    适配 key-value 形式的基本信息表（如国泰基金年度对账单的 Table 0）：
+        | 期初总金额：  | 52570.36 |
+        | 期末变化总金额：| -6076.53 |
+
+    若未找到则返回 None。
+    """
+    for table in tables:
+        all_cell_text = [
+            c.get_text(strip=True)
+            for row in table.find_all("tr")
+            for c in row.find_all(["td", "th"])
+        ]
+        # 快速过滤：表格中必须含有「期初总金额」字样
+        if not any("期初总金额" in t for t in all_cell_text):
+            continue
+        for row in table.find_all("tr"):
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) >= 2 and "期初总金额" in cells[0]:
+                try:
+                    return Decimal(cells[1].replace(",", ""))
+                except InvalidOperation:
+                    pass
+    return None
+
+
+def _extract_profit_map(tables: Any) -> Dict[str, Decimal]:
+    """从持仓表中提取各基金的收益金额（如有「收益金额」「盈亏金额」等列）。
+
+    适配国泰基金年度对账单 Table 1 中的「收益金额」列。
+    若未找到收益列或无基金代码列，则返回空字典。
+
+    Returns:
+        {基金代码: 收益金额}
+    """
+    _PROFIT_PATTERNS = ("收益金额", "盈亏金额", "浮动盈亏", "收益", "盈亏")
+
+    for table in tables:
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        headers = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+        # 跳过交易明细表
+        if set(headers) & _TRANSACTION_TABLE_SIGNALS:
+            continue
+        profit_idx = next(
+            (i for i, h in enumerate(headers)
+             if any(p in h for p in _PROFIT_PATTERNS)),
+            None,
+        )
+        code_idx = next(
+            (i for i, h in enumerate(headers) if "代码" in h), None
+        )
+        if profit_idx is None or code_idx is None:
+            continue
+
+        profit_map: Dict[str, Decimal] = {}
+        for row in rows[1:]:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if max(profit_idx, code_idx) >= len(cells):
+                continue
+            code = cells[code_idx].strip()
+            if not code:
+                continue
+            try:
+                profit_map[code] = _parse_decimal(cells[profit_idx])
+            except (InvalidOperation, IndexError):
+                pass
+        if profit_map:
+            return profit_map
+    return {}
+
+
+def _extract_transaction_map(
+    tables: Any,
+) -> Dict[str, Tuple[Decimal, Decimal]]:
+    """从交易明细表提取各基金的累计入金和出金。
+
+    识别含「业务类型」「申请日期」「确认日期」等特征列的表格，
+    按基金代码汇总申购（inflow）和赎回（outflow）金额。
+
+    Returns:
+        {基金代码: (inflow合计, outflow合计)}
+    """
+    result: Dict[str, list] = {}  # code → [inflow, outflow]
+
+    for table in tables:
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        headers = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+        if not (set(headers) & _TRANSACTION_TABLE_SIGNALS):
+            continue
+
+        # 定位关键列索引
+        code_idx = next(
+            (i for i, h in enumerate(headers) if "代码" in h), None
+        )
+        name_idx = next(
+            (i for i, h in enumerate(headers) if "基金名称" in h or "产品名称" in h), None
+        )
+        type_idx = next(
+            (i for i, h in enumerate(headers) if "业务类型" in h), None
+        )
+        # 金额列：优先匹配「确认金额」「交易金额」「成交金额」，次之匹配任意含「金额」的列
+        amt_idx = next(
+            (i for i, h in enumerate(headers)
+             if any(k in h for k in ("确认金额", "交易金额", "成交金额"))),
+            None,
+        )
+        if amt_idx is None:
+            amt_idx = next(
+                (i for i, h in enumerate(headers) if "金额" in h), None
+            )
+
+        if type_idx is None or amt_idx is None:
+            logger.debug("交易明细表缺少必要列（业务类型/金额），跳过")
+            continue
+
+        for row in rows[1:]:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            needed = max(c for c in [type_idx, amt_idx, code_idx, name_idx] if c is not None)
+            if needed >= len(cells):
+                continue
+
+            tx_type = cells[type_idx]
+            code = cells[code_idx].strip() if code_idx is not None else None
+            name = cells[name_idx].strip() if name_idx is not None else None
+            key = code if code else name
+            if not key:
+                continue
+
+            try:
+                amount = Decimal(cells[amt_idx].replace(",", ""))
+            except InvalidOperation:
+                continue
+
+            if amount <= Decimal("0"):
+                continue
+
+            if key not in result:
+                result[key] = [Decimal("0"), Decimal("0")]
+
+            if any(kw in tx_type for kw in _INFLOW_TX_KEYWORDS):
+                result[key][0] += amount
+            elif any(kw in tx_type for kw in _OUTFLOW_TX_KEYWORDS):
+                result[key][1] += amount
+
+    return {k: (v[0], v[1]) for k, v in result.items()}

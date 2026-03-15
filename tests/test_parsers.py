@@ -248,6 +248,192 @@ class TestFundEmailParserHoldings:
 
 
 # ---------------------------------------------------------------------------
+# 交易明细表 + 账户摘要表解析测试
+# ---------------------------------------------------------------------------
+
+# 模拟：包含【基本信息表】+【持仓表】+【交易明细表】的综合 HTML
+COMPLETE_STATEMENT_HTML = """
+<html><body>
+<!-- Table 0: 账户摘要 (key-value) -->
+<table>
+  <tr><td>基金账号：</td><td>123456789</td></tr>
+  <tr><td>统计时间段：</td><td>2024-1-1至2024-12-31</td></tr>
+  <tr><td>期初总金额：</td><td>20000.00</td></tr>
+  <tr><td>期末变化总金额：</td><td>-500.00</td></tr>
+</table>
+<!-- Table 1: 持仓表 (无期初列) -->
+<table>
+  <tr>
+    <th>基金代码</th><th>基金名称</th>
+    <th>期末持有净值</th><th>状态</th>
+  </tr>
+  <tr><td>000001</td><td>华夏成长混合</td><td>15000.00</td><td>继续持有</td></tr>
+  <tr><td>160706</td><td>嘉实汪深300ETF</td><td>5000.00</td><td>继续持有</td></tr>
+</table>
+<!-- Table 2: 交易明细表 -->
+<table>
+  <tr>
+    <th>申请日期</th><th>确认日期</th><th>基金代码</th>
+    <th>基金名称</th><th>业务类型</th><th>确认金额</th><th>状态</th>
+  </tr>
+  <tr><td>2024-03-10</td><td>2024-03-13</td><td>000001</td>
+      <td>华夏成长混合</td><td>基金申购</td><td>1000.00</td><td>成功</td></tr>
+  <tr><td>2024-06-05</td><td>2024-06-07</td><td>000001</td>
+      <td>华夏成长混合</td><td>基金赎回</td><td>500.00</td><td>成功</td></tr>
+  <tr><td>2024-09-01</td><td>2024-09-03</td><td>160706</td>
+      <td>嘉实汪深300ETF</td><td>基金申购</td><td>300.00</td><td>成功</td></tr>
+</table>
+</body></html>
+"""
+
+
+class TestTransactionAndSummaryParsing:
+    """验证交易明细表和账户摘要表的新解析逻辑。"""
+
+    def setup_method(self):
+        self.parser = FundEmailParser()
+        self.subject = "2024年对账单"
+
+    def _parse(self, html=COMPLETE_STATEMENT_HTML):
+        msg = make_email(self.subject, html)
+        return self.parser.parse(msg)
+
+    def test_transaction_rows_not_parsed_as_holdings(self):
+        """交易明细表的行不应被当作持仓记录解析，只应有 2 条持仓。"""
+        holdings = self._parse()
+        assert len(holdings) == 2
+
+    def test_inflow_from_transaction_table(self):
+        """申购交易金额应正确回填到对应基金的 inflow。"""
+        holdings = self._parse()
+        huaxia = next(h for h in holdings if h.asset.code == "000001")
+        assert huaxia.inflow == Decimal("1000.00")
+
+    def test_outflow_from_transaction_table(self):
+        """赎回交易金额应正确回填到对应基金的 outflow。"""
+        holdings = self._parse()
+        huaxia = next(h for h in holdings if h.asset.code == "000001")
+        assert huaxia.outflow == Decimal("500.00")
+
+    def test_inflow_multiple_transactions_summed(self):
+        """同一基金多笔申购应汇总。嘉实小表只有 300 。"""
+        holdings = self._parse()
+        jishi = next(h for h in holdings if h.asset.code == "160706")
+        assert jishi.inflow == Decimal("300.00")
+        assert jishi.outflow == Decimal("0")
+
+    def test_portfolio_opening_distributed_proportionally(self):
+        """期初总金额 20000 应按期末市值占比分配到各基金。"""
+        holdings = self._parse()
+        total_opening = sum(h.opening_value for h in holdings)
+        # 分配后各基金 opening 之和应等于期初总金额（允许 0.01 舍入误差）
+        assert abs(total_opening - Decimal("20000.00")) <= Decimal("0.10")
+
+    def test_portfolio_opening_ratio_follows_closing_value(self):
+        """期初市值占比应等于期末市值占比（误差 < 1%）。"""
+        holdings = self._parse()
+        huaxia = next(h for h in holdings if h.asset.code == "000001")
+        jishi = next(h for h in holdings if h.asset.code == "160706")
+        # 期末占比 15000:5000 = 3:1，期初应也是 3:1
+        ratio = huaxia.opening_value / jishi.opening_value
+        assert abs(ratio - Decimal("3")) < Decimal("0.05")
+
+    def test_existing_opening_column_not_overridden(self):
+        """持仓表已有期初市值列时，不应被期初总金额覆盖。"""
+        # SAMPLE_FUND_STATEMENT_HTML 有 "期初市值" 列，无摘要表， opening 应保持原值
+        msg = make_email(self.subject, SAMPLE_FUND_STATEMENT_HTML)
+        holdings = self.parser.parse(msg)
+        huaxia = next(h for h in holdings if h.asset.name == "华夏成长混合")
+        assert huaxia.opening_value == Decimal("10000.00")
+
+    def test_no_summary_table_no_distribution(self):
+        """没有摘要表时，期初市值应保持 0。"""
+        # MARKET_VALUE_ONLY_HTML 无摘要表，无期初列，opening 应为 0
+        msg = make_email(self.subject, MARKET_VALUE_ONLY_HTML)
+        holdings = self.parser.parse(msg)
+        assert holdings[0].opening_value == Decimal("0")
+
+
+class TestGTFundFixture:
+    """国泰基金 2025 年年度对账单真实 .eml fixture 端到端验证。"""
+
+    @pytest.fixture(scope="class")
+    def gtfund_holdings(self):
+        import email as email_mod
+        import os
+        fixture = os.path.join(
+            os.path.dirname(__file__),
+            "fixtures", "emails", "2025_gtfund_annual_statement.eml",
+        )
+        with open(fixture, "rb") as f:
+            msg = email_mod.message_from_bytes(f.read())
+        return FundEmailParser().parse(msg)
+
+    def test_holding_count(self, gtfund_holdings):
+        """应解析出 3 条持仓（交易表不再产生额外行）。"""
+        assert len(gtfund_holdings) == 3
+
+    def test_inflow_for_shipin(self, gtfund_holdings):
+        """食品(160222)全年定投申购合计 2550。"""
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert shipin.inflow == Decimal("2550.00")
+
+    def test_outflow_for_shipin(self, gtfund_holdings):
+        """食品(160222)全年赎回合计 43853.30。"""
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert shipin.outflow == Decimal("43853.30")
+
+    def test_inflow_for_huobi(self, gtfund_holdings):
+        """国泰货币B(005253)全年无交易。"""
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        assert huobi.inflow == Decimal("0")
+        assert huobi.outflow == Decimal("0")
+
+    def test_inflow_for_sp500(self, gtfund_holdings):
+        """国泰标普500ETF(017028)全年申购 80。"""
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        assert sp500.inflow == Decimal("80.00")
+        assert sp500.outflow == Decimal("0")
+
+    def test_huobi_classified_as_cash(self, gtfund_holdings):
+        """国泰货币B 应识别为现金类型。"""
+        from fininsight.models.enums import AssetType
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        assert huobi.asset.asset_type == AssetType.CASH
+
+    def test_opening_value_from_profit(self, gtfund_holdings):
+        """opening 应由期间收益反推而来，017028 新仓期初应为 0。"""
+        for h in gtfund_holdings:
+            assert h.opening_value >= Decimal("0")
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        assert sp500.opening_value == Decimal("0.00")
+
+    def test_total_opening_matches_portfolio(self, gtfund_holdings):
+        """收益反推后汇总 opening 应接近 99870.19。"""
+        total = sum(h.opening_value for h in gtfund_holdings)
+        assert abs(total - Decimal("99870.19")) <= Decimal("0.10")
+
+    def test_closing_total(self, gtfund_holdings):
+        """期末持有净值合计应等于 52570.36。"""
+        total = sum(h.closing_value for h in gtfund_holdings)
+        assert total == Decimal("52570.36")
+
+    def test_per_fund_profit_from_email(self, gtfund_holdings):
+        """每只基金收益应与邮件中的期间收益表完全匹配。"""
+        huobi = next(h for h in gtfund_holdings if h.asset.code == "005253")
+        sp500 = next(h for h in gtfund_holdings if h.asset.code == "017028")
+        shipin = next(h for h in gtfund_holdings if h.asset.code == "160222")
+        assert huobi.profit == Decimal("78.44")
+        assert sp500.profit == Decimal("1.48")
+        assert shipin.profit == Decimal("-6156.45")
+
+    def test_total_profit_matches_email_stated_value(self, gtfund_holdings):
+        """收益合计应等于邮件所述 本期收益 = -6076.53。"""
+        total_profit = sum(h.profit for h in gtfund_holdings)
+        assert total_profit == Decimal("-6076.53")
+
+
+# ---------------------------------------------------------------------------
 # parse - 资产分类测试
 # ---------------------------------------------------------------------------
 
