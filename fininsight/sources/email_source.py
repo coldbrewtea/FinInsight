@@ -112,5 +112,24 @@ class EmailSource(DataSource):
         else:
             self._conn = imaplib.IMAP4(cfg.host, cfg.port)
 
+        # 部分邮箱（如 163）要求客户端在登录前通过 ID 命令标识自身
+        self._send_imap_id()
+
         self._conn.login(cfg.username, cfg.password)
         logger.info("IMAP 登录成功: %s", cfg.username)
+
+    def _send_imap_id(self) -> None:
+        """发送 IMAP ID 命令以标识客户端（RFC 2971）。
+
+        163 等邮箱要求客户端在登录前发送 ID 命令，
+        否则后续 SELECT 等操作会被服务器拒绝。
+        """
+        if self._conn is None:
+            return
+        try:
+            imaplib.Commands["ID"] = ("NONAUTH", "AUTH", "SELECTED")
+            self._conn._simple_command(
+                "ID", '("name" "FinInsight" "version" "1.0")'
+            )
+        except Exception as exc:
+            logger.debug("IMAP ID 命令失败（非致命）: %s", exc)

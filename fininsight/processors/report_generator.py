@@ -39,8 +39,8 @@ class ReportGenerator:
         Returns:
             Report 对象，每条 HoldingRecord.contribution_rate 已填充。
         """
-        # 1. 仅保留与目标周期匹配的记录
-        period_holdings = [h for h in holdings if h.period == period]
+        # 1. 保留与目标周期有交集的记录（月度/年度账单均可纳入）
+        period_holdings = [h for h in holdings if h.period.overlaps(period)]
         logger.debug(
             "周期 %s 共匹配 %d / %d 条持仓记录",
             period,
@@ -48,8 +48,8 @@ class ReportGenerator:
             len(holdings),
         )
 
-        # 2. 合并同一标的的重复记录
-        consolidated = self._consolidate(period_holdings)
+        # 2. 合并同一标的跨不同时间周期的记录
+        consolidated = self._consolidate(period_holdings, period)
 
         # 3. 计算收益贡献率
         report = Report(period=period, holdings=consolidated)
@@ -61,30 +61,35 @@ class ReportGenerator:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _consolidate(self, holdings: List[HoldingRecord]) -> List[HoldingRecord]:
-        """合并同一标的的多条记录（如来自多封邮件/多个数据源）。
+    def _consolidate(
+        self, holdings: List[HoldingRecord], report_period: ReportPeriod
+    ) -> List[HoldingRecord]:
+        """合并同一标的跨不同时间周期的多条记录。
 
-        合并规则：相同 (asset.name, asset.code, period) 的记录，
-        将 opening_value、closing_value、inflow、outflow 分别累加。
+        合并规则：相同 (asset.name, asset.code) 的记录，
+        按原始账单的时间先后排列，取最早记录的 opening_value
+        和最晚记录的 closing_value，inflow / outflow 累加。
+        合并后 period 统一设为报告周期。
         """
-        bucket: Dict[Tuple, HoldingRecord] = {}
+        bucket: Dict[Tuple, List[HoldingRecord]] = {}
 
         for h in holdings:
-            key = (h.asset.name, h.asset.code, h.period)
-            if key not in bucket:
-                bucket[key] = h
-            else:
-                existing = bucket[key]
-                bucket[key] = HoldingRecord(
-                    asset=existing.asset,
-                    period=existing.period,
-                    opening_value=existing.opening_value + h.opening_value,
-                    closing_value=existing.closing_value + h.closing_value,
-                    inflow=existing.inflow + h.inflow,
-                    outflow=existing.outflow + h.outflow,
-                )
+            key = (h.asset.name, h.asset.code)
+            bucket.setdefault(key, []).append(h)
 
-        result = list(bucket.values())
+        result: List[HoldingRecord] = []
+        for records in bucket.values():
+            # 按账单起始日期排序
+            records.sort(key=lambda r: r.period.start_date)
+            result.append(HoldingRecord(
+                asset=records[0].asset,
+                period=report_period,
+                opening_value=records[0].opening_value,
+                closing_value=records[-1].closing_value,
+                inflow=sum((r.inflow for r in records), Decimal("0")),
+                outflow=sum((r.outflow for r in records), Decimal("0")),
+            ))
+
         if len(result) < len(holdings):
             logger.info("合并后持仓数: %d（合并前: %d）", len(result), len(holdings))
         return result

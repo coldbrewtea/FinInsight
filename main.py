@@ -24,6 +24,7 @@ from datetime import date
 
 from fininsight.config_loader import load_config
 from fininsight.exporters.csv_exporter import CSVExporter
+from fininsight.exporters.html_exporter import HTMLExporter
 from fininsight.models.records import ReportPeriod
 from fininsight.parsers.fund_email_parser import FundEmailParser
 from fininsight.parsers.fullgoal_email_parser import FullgoalEmailParser
@@ -75,6 +76,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="报告输出目录或文件路径（默认使用配置文件中的 output.directory）",
+    )
+    parser.add_argument(
+        "--format", "-f",
+        choices=["csv", "html"],
+        default="csv",
+        help="报告输出格式（默认: csv）",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -145,7 +152,7 @@ def main() -> int:
         logger.warning("没有启用任何解析器，请检查配置文件中的 parsers 节点")
 
     generator = ReportGenerator()
-    exporter = CSVExporter()
+    exporter = HTMLExporter() if args.format == "html" else CSVExporter()
     output_dir = args.output or config.output.directory
 
     # 4. 从邮箱获取数据
@@ -178,7 +185,7 @@ def main() -> int:
         float(report.total_profit_rate) * 100,
     )
 
-    # 6. 导出 CSV
+    # 6. 导出报告
     try:
         output_path = exporter.export(report, output_dir)
         logger.info("报告已保存至: %s", output_path)
