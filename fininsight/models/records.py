@@ -72,6 +72,10 @@ class ReportPeriod:
         """按年份创建全年周期。"""
         return cls(date(year, 1, 1), date(year, 12, 31))
 
+    def overlaps(self, other: ReportPeriod) -> bool:
+        """判断本周期是否与另一个周期有时间交集。"""
+        return self.start_date <= other.end_date and self.end_date >= other.start_date
+
     def __str__(self) -> str:
         return (
             f"{self.start_date.strftime('%Y-%m-%d')} ~ "
