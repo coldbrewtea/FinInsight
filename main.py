@@ -28,6 +28,7 @@ from fininsight.exporters.html_exporter import HTMLExporter
 from fininsight.models.records import ReportPeriod
 from fininsight.parsers.fund_email_parser import FundEmailParser
 from fininsight.parsers.fullgoal_email_parser import FullgoalEmailParser
+from fininsight.parsers.efund_email_parser import EfundEmailParser
 from fininsight.processors.report_generator import ReportGenerator
 from fininsight.sources.email_source import EmailSource
 
@@ -141,6 +142,8 @@ def main() -> int:
     parsers = []
     # 富国基金解析器（sender 匹配优先，放在通用解析器之前）
     parsers.append(FullgoalEmailParser())
+    # 易方达基金解析器
+    parsers.append(EfundEmailParser())
     if config.parsers.fund_email.enabled:
         parsers.append(
             FundEmailParser(

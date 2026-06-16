@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # IMAP 日期格式，例如 "01-Jan-2024"
 _IMAP_DATE_FMT = "%d-%b-%Y"
 
+# IMAP 搜索窗口向前/向后各扩展的天数。
+# 基金对账单通常在月末 1~30 天后才由邮箱发送，扩展窗口可避免漏拉邮件。
+# 实际报告期筛选由 ReportGenerator.generate() 的 period.overlaps() 负责。
+_FETCH_PADDING_DAYS = 45
+
 
 class EmailSource(DataSource):
     """通过 IMAP 协议从邮箱获取投资对账单邮件。
@@ -58,9 +63,11 @@ class EmailSource(DataSource):
 
         self._conn.select(self._config.mailbox)  # type: ignore[union-attr]
 
-        # IMAP SEARCH 的 BEFORE 不含当天，因此结束日期 +1 天
-        since = period.start_date.strftime(_IMAP_DATE_FMT)
-        before = (period.end_date + timedelta(days=1)).strftime(_IMAP_DATE_FMT)
+        # IMAP SEARCH 按邮件接收时间过滤，而对账单通常延迟发送（1~45 天）。
+        # 将搜索窗口前后各扩展 _FETCH_PADDING_DAYS 天，以捕获延迟到达的邮件。
+        # BEFORE 不含当天，因此结束日期额外 +1 天。
+        since = (period.start_date - timedelta(days=_FETCH_PADDING_DAYS)).strftime(_IMAP_DATE_FMT)
+        before = (period.end_date + timedelta(days=_FETCH_PADDING_DAYS + 1)).strftime(_IMAP_DATE_FMT)
         search_criterion = f'(SINCE "{since}" BEFORE "{before}")'
 
         logger.debug("IMAP search: %s in %s", search_criterion, self._config.mailbox)
